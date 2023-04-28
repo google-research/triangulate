@@ -6,9 +6,9 @@ import coloredlogs
 import pdb
 import os
 import logging
-import magic 
-import math 
-import numpy as np 
+import magic
+import math
+import numpy as np
 import pprint           # For manual debugging
 import random
 import subprocess
@@ -32,9 +32,9 @@ def get_identifiers(expr):
     try:
         compile(expr, '<string>', 'eval')
     except SyntaxError as e:
-        errMsg = f"Error: {expr} is an invalid Python expression."
-        log.error(errMsg)
-        raise SyntaxError(errMsg)
+        err_msg = f"Error: {expr} is an invalid Python expression."
+        log.error(err_msg)
+        raise SyntaxError(err_msg)
     identifiers = set()
     node = ast.parse(expr, mode='eval')
     for subnode in ast.walk(node):
@@ -53,32 +53,32 @@ def sample_zipfian(num_samples, support_size = 10 ):
 def sample_wo_replacement_uniform(num_samples, support):
     return np.random.choice(np.arange(1, len(support)+1), size=num_samples, replace=False)
 
-# Barebones RL 
+# Barebones RL
 
 class State:
 
-    def __init__(self, fd, iSE, focalExpr, probes = []):
+    def __init__(self, fd, ise, focal_expr, probes = []):
         self.codeview = fd.readlines() # TODO: catch exceptions?
-        self.iSE = iSE
-        self.focalExpr = focalExpr
+        self.ise = ise
+        self.focal_expr = focal_expr
         self.fd = fd
         self.probes = probes
 
-    def getIllegalStateExprIds(self):
-        return get_identifiers(self.iSE)
+    def get_illegal_state_expr_ids(self):
+        return get_identifiers(self.ise)
 
-    def illegalBindings(self):
-        idents = self.getIllegalStateExprIds()
+    def illegal_bindings(self):
+        idents = self.get_illegal_state_expr_ids()
         ident = idents.pop()
         bindings =  f"{ident} = " + "{" + f"{ident}" + "}"
         for ident in idents:
             bindings += f", {ident} = " + "{" + f"{ident}" + "}"
         return bindings
- 
-    def getCodeView():
+
+    def get_codeview(self):
         return codeview
 
-    def toString(self):
+    def to_string(self):
         print(self.file, self.lines)
 
 
@@ -88,87 +88,87 @@ class Agent:
         self.totalReward = reward
         self.env = env
 
-    def pickAction(self, state, reward):
+    def pick_action(self, state, reward):
         print("abstract method, not sure it's needed")
 
-    def addProbes(self, state, probes):
+    def add_probes(self, state, probes):
         for offset, query in probes:
             state.codeview.insert(offset, query)
         state.fd.seek(0)
         state.fd.writelines(state.codeview)
 
-    def toString(self):
+    def to_string(self):
         print(self.reward) # want string, not newline to stderr
 
 
 class Localiser(Agent):
 
-    def generateProbesRandom(self, state):
+    def _generate_probes_random(self, state):
         #TODO: Handle imports needed by probe queries
-        samples = sample_zipfian(1,5) 
+        samples = sample_zipfian(1,5)
         codeviewLength = len(state.codeview)
         offsets = sample_wo_replacement_uniform(samples[0], range(1, codeviewLength))
         offsets.sort()
         offsets = [idx + v for idx, v in enumerate(offsets)]
-        iSE = f"Illegal state predicate: {state.iSE} = " + "{eval(" + f"{state.iSE}" + ")}; "
-        iSB = f"bindings: {state.illegalBindings()}"
-        query = 'f"' + iSE + iSB + '"'
+        ise = f"Illegal state predicate: {state.ise} = " + "{eval(" + f"{state.ise}" + ")}; "
+        isb = f"bindings: {state.illegal_bindings()}"
+        query = 'f"' + ise + isb + '"'
         probes = []
         for offset in offsets:
             probes.append((offset, f"print({query})\n"))
         state.probes = probes       # Store probes
         return probes
-        
-    # TODO: Build AST, reverse its edges and walk the tree from focal expression 
+
+    # TODO: Build AST, reverse its edges and walk the tree from focal expression
     #    to control expressions and defs
     # Ignore aliases for now.
-    def generateProbesSE(self, state):
+    def _generate_probes_SE(self, state):
         raise Exception("Not implementated")
 
     # Answers two questions:  decides 1) where to query 2) what.
     # Returns list of probes
-    def generateProbes(self, state):
-        return self.generateProbesRandom(state)
+    def generate_probes(self, state):
+        return self._generate_probes_random(state)
 
-    def pickAction(self, state, reward):
+    def pick_action(self, state, reward):
         # Todo:  add action selection; Google examples wire to gP.
         #pp.pprint(f"state.codeview = {state.codeview}, reward = {reward}, self.totalReward = {self.totalReward}")
-        self.addProbes(state, self.generateProbes(state))
+        self.add_probes(state, self.generate_probes(state))
         self.totalReward += reward
         self.env.live = False
 
- 
+
 class Environment:
 
     def __init__(self, args):
-        self.buggyProgramName = args.buggyProgramName
+        self.buggy_program_name = args.buggy_program_name
         self.buggyProgramOutput = set()
-        self.probeOutputFilename = args.probeOutputFilename
+        self.probe_output_filename = args.probe_output_filename
         self.steps = 0
-        self.maxSteps = args.maxSteps
+        self.max_steps = args.max_steps
         if not args.burnin == 0:
-            self.maxBurnin = math.ceil(burnin*self.maxSteps) 
+            self.maxBurnin = math.ceil(burnin*self.max_steps)
         else:
-            self.maxBurnin = args.maxSteps
+            self.maxBurnin = args.max_steps
 
-        file_type = magic.from_file(self.buggyProgramName, mime=True)
+        file_type = magic.from_file(self.buggy_program_name, mime=True)
         if not file_type.startswith('text/x-script.python'):
-            errMsg = f"Error: {self.buggyProgramName} is not a Python script."
-            log.error(errMsg)
-            raise Exception(errMsg)
-        if not os.access(self.buggyProgramName, os.X_OK):
-            errMsg = f"Error: {self.buggyProgramName} is not executable."
-            log.error(errMsg)
-            raise Exception(errMsg)
+            err_msg = f"Error: {self.buggy_program_name} is not a Python script."
+            log.error(err_msg)
+            raise Exception(err_msg)
+        if not os.access(self.buggy_program_name, os.X_OK):
+            err_msg = f"Error: {self.buggy_program_name} is not executable."
+            log.error(err_msg)
+            raise Exception(err_msg)
         try:
-            self.fd = open(self.buggyProgramName, 'r+')
+            self.fd = open(self.buggy_program_name, 'r+')
         except IOError:
-            log.error(f"Error: Unable to open file '{self.buggyProgramName}'.")
+            log.error(f"Error: Unable to open file '{self.buggy_program_name}'.")
             raise e
-        self.state = State(self.fd, args.illegalStateExpr, args.bugTrap)
+        self.state = State(self.fd, args.illegal_state_expr, args.bug_trap)
 
         try:
-            cmd = ['./' + self.buggyProgramName] 
+            cmd = ['./' + self.buggy_program_name]
             result = subprocess.run(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
             )
@@ -180,10 +180,10 @@ class Environment:
             raise e
         self.buggyProgramOutput.add(result.stdout + result.stderr)
 
-    def executeSubject(self):
+    def execute_subject(self):
         result = ""
         try:
-            cmd = ['./' + self.buggyProgramName] 
+            cmd = ['./' + self.buggy_program_name]
             result = subprocess.run(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
             )
@@ -195,59 +195,59 @@ class Environment:
             log.error(f"Error: {e}")
             raise e
 
-        # This check --- for whether we've seen the output during burnin --- is an instance 
+        # This check --- for whether we've seen the output during burnin --- is an instance
         # of the coupon collector's problem.
-        if(self.steps > self.maxBurnin and not stdouterr in self.buggyProgramOutput): 
-            errMsg = f"Error: probe insertion or execution changed program semantics."
-            log.error(errMsg)
-            raise Exception(errMsg)
+        if(self.steps > self.maxBurnin and not stdouterr in self.buggyProgramOutput):
+            err_msg = f"Error: probe insertion or execution changed program semantics."
+            log.error(err_msg)
+            raise Exception(err_msg)
 
         self.buggyProgramOutput.add(stdouterr)
         # Create and return a new state instance
         # Probe's write their output to a fresh file
 
     def reward(self):
-        # TODO: 
+        # TODO:
         return 1
 
     def terminate(self):
-        if (self.steps >= self.maxSteps):
+        if (self.steps >= self.max_steps):
             return True
         return False
 
     def update(self, action):
         self.steps += 1
-        self.executeSubject()
-    
-    def toString(self):
+        self.execute_subject()
+
+    def to_string(self):
         print("TODO")
 
-def processArgs():
+def process_args():
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("-p", "--buggyProgramName", required=True, help="the name of a buggy file")
-    parser.add_argument("-b", "--bug", required=True, help="a bug-triggering input") 
-    parser.add_argument("-i", "--illegalStateExpr", required=True, help="a predicate defining illegal state") 
-    parser.add_argument("-t", "--bugTrap", required=True, help="program point at which the bug was observed") 
+    parser.add_argument("-p", "--buggy_program_name", required=True, help="the name of a buggy file")
+    parser.add_argument("-b", "--bug", required=True, help="a bug-triggering input")
+    parser.add_argument("-i", "--illegal_state_expr", required=True, help="a predicate defining illegal state")
+    parser.add_argument("-t", "--bug_trap", required=True, help="program point at which the bug was observed")
 
-    parser.add_argument("-v", help="log level") 
-    # During burnin, the program stores outputs for later use to checking whether 
+    parser.add_argument("-v", help="log level")
+    # During burnin, the program stores outputs for later use to checking whether
     # injecting/executing probes has changed program semantics.
-    parser.add_argument("-n", "--burnin", nargs='?', default=0, type=int, help="percentage of maxSteps to use as burnin steps to tolerate nondterministic buggy programs; zero (the default) disables burnin") 
-    parser.add_argument("-m", "--maxSteps", nargs='?', default=10, type=int, help="maximum simulation steps") 
-    parser.add_argument("-o", "--probeOutputFilename", nargs='?', const="__probeOutput.dmp", type=str, help="maximum simulation steps") 
+    parser.add_argument("-n", "--burnin", nargs='?', default=0, type=int, help="percentage of max_steps to use as burnin steps to tolerate nondterministic buggy programs; zero (the default) disables burnin")
+    parser.add_argument("-m", "--max_steps", nargs='?', default=10, type=int, help="maximum simulation steps")
+    parser.add_argument("-o", "--probe_output_filename", nargs='?', const="__probeOutput.dmp", type=str, help="maximum simulation steps")
 
     args = parser.parse_args()
 
     if not 0 <= args.burnin < 1:
-        errMsg = "Error: burnin period must fall into the interval [0,1)."
-        log.error(errMsg)
-        raise Exception(errMsg)
- 
+        err_msg = "Error: burnin period must fall into the interval [0,1)."
+        log.error(err_msg)
+        raise Exception(err_msg)
+
     if args.__dict__.get("v", False):
         if 0 <= args.v < 6:
-            log_levels = [ logging.NOTSET, logging.CRITICAL, logging.ERROR, 
+            log_levels = [ logging.NOTSET, logging.CRITICAL, logging.ERROR,
                 logging.WARNING, logging.INFO, logging.DEBUG,
             ]
             coloredlogs.install(
@@ -255,20 +255,20 @@ def processArgs():
             )
         logging.getLogger("localiser").setLevel(log_levels[args.v])
 
-    if not args.buggyProgramName:
-        args.buggyProgramName = input("Please enter the name of the buggy program: ")
+    if not args.buggy_program_name:
+        args.buggy_program_name = input("Please enter the name of the buggy program: ")
 
     return args
 
 
 def main():
 
-    args = processArgs()
+    args = process_args()
     env = Environment(args)
     localiser = Localiser(env)
 
     while(not env.terminate()):
-        env.update(localiser.pickAction(env.state, env.reward()))
+        env.update(localiser.pick_action(env.state, env.reward()))
 
 if __name__ == "__main__":
     main()
