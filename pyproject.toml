@@ -2,7 +2,7 @@
 # Project metadata. Available keys are documented at:
 # https://packaging.python.org/en/latest/specifications/declaring-project-metadata
 name = "triangulate"
-description = ""
+description = "Bug localization by reinforcement learning"
 readme = "README.md"
 requires-python = ">=3.8"
 license = {file = "LICENSE"}
