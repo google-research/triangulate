@@ -68,10 +68,11 @@ class State:
         return get_identifiers(self.iSE)
 
     def illegalBindings(self):
-        # TODO: fix last binding ugliness
-        bindings = ""
-        for ident in self.getIllegalStateExprIds():
-            bindings += f"{ident} = " + "{" + f"{ident}" + "}, "
+        idents = self.getIllegalStateExprIds()
+        ident = idents.pop()
+        bindings =  f"{ident} = " + "{" + f"{ident}" + "}"
+        for ident in idents:
+            bindings += f", {ident} = " + "{" + f"{ident}" + "}"
         return bindings
  
     def getCodeView():
@@ -103,18 +104,18 @@ class Agent:
 class Localiser(Agent):
 
     def generateProbesRandom(self, state):
-        #TODO: Handle inports needed by probe queries
+        #TODO: Handle imports needed by probe queries
         samples = sample_zipfian(1,5) 
         codeviewLength = len(state.codeview)
         offsets = sample_wo_replacement_uniform(samples[0], range(1, codeviewLength))
         offsets.sort()
         offsets = [idx + v for idx, v in enumerate(offsets)]
-        iSE = state.iSE
-        illegalStateExpr = f"Illegal state predicate: {iSE} = " + "{eval(" + f"{iSE}" + ")}"
-        iSB = f"{state.illegalBindings()}"
+        iSE = f"Illegal state predicate: {state.iSE} = " + "{eval(" + f"{state.iSE}" + ")}; "
+        iSB = f"bindings: {state.illegalBindings()}"
+        query = 'f"' + iSE + iSB + '"'
         probes = []
         for offset in offsets:
-            probes.append((offset, f"print({illegalStateExpr}; bindings: {iSB})\n"))
+            probes.append((offset, f"print({query})\n"))
         state.probes = probes       # Store probes
         return probes
         
