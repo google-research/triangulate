@@ -1,5 +1,9 @@
 #!/usr/local/bin/python3
 
+"""
+This file is just a devtime input file used as a test input to trangulate.
+"""
+
 import random
 
 # Define a dictionary of quotes and their attributions
