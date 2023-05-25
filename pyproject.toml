@@ -15,7 +15,11 @@ keywords = []
 
 # pip dependencies of the project
 # Installed locally with `pip install -e .`
-dependencies = []
+dependencies = [
+    "coloredlogs",
+    "python-magic",
+    "numpy",
+]
 
 # `version` is automatically set by flit to use `triangulate.__version__`
 dynamic = ["version"]
