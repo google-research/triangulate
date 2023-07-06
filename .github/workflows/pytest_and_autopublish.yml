@@ -28,8 +28,9 @@ jobs:
     - run: pip freeze
 
     # Run tests (in parallel)
-    - name: Run core tests
-      run: pytest -vv -n auto
+    # TODO: Uncomment after tests have been added.
+    # - name: Run core tests
+    #   run: pytest -vv -n auto
 
   # TODO: Uncomment when ready to publish on PyPI.
   # # Auto-publish when version is increased
