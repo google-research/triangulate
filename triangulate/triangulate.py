@@ -63,13 +63,13 @@ class LineVisitor(ast.NodeVisitor):
         elif isinstance(child, (ast.Dict, ast.List)):
           continue  # Skip dictionary and list initializers
         elif hasattr(child, "lineno"):
-          self.insertation_points.append((node, i))
+          self.insertion_points.append((node, i))
     elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
       return  # Skip multiline string literals
     self.generic_visit(node)
 
 
-def get_insertion_points(tree):
+def get_insertion_points(tree: bytes) -> []:
   # Collect insertion points
   visitor = LineVisitor()
   visitor.visit(tree)
@@ -111,8 +111,14 @@ def extract_identifiers(expr):
 ## Stats Utils
 
 
-def sample_zipfian(num_samples, zipf_param=1.5, support_size=10):
+def sample_zipfian(
+    num_samples: int, zipf_param: float = 1.5, support_size: int = 10
+) -> np.ndarray:
   """Generate a sample set from a Zipfian distribution over an integer interval.
+
+  Args:
+
+  Args:
 
   Args:
       num_samples: The number of samples to return
@@ -129,7 +135,7 @@ def sample_zipfian(num_samples, zipf_param=1.5, support_size=10):
   return rng.choice(np.arange(1, support_size + 1), size=num_samples, p=weights)
 
 
-def sample_wo_replacement_uniform(num_samples, support):
+def sample_wo_replacement_uniform(num_samples: int, support: []) -> np.ndarray:
   """Uniformly sample num_samples from [1, suppport].
 
   Args:
@@ -139,9 +145,12 @@ def sample_wo_replacement_uniform(num_samples, support):
   Returns:
       A sample set from the uniform over the support
   """
-  return rng.choice(
-      np.arange(1, len(support) + 1), size=num_samples, replace=False
-  )
+  if num_samples > len(support):
+    raise ValueError(
+        "When sampling with replacement, the number of samples cannot exceed"
+        " the cardinality of the set."
+    )
+  return rng.choice(support, size=num_samples, replace=False)
 
 
 ## End Stats Utils
@@ -283,7 +292,7 @@ class Agent:
         reward,
     )
 
-  def add_probes(self, state: State, probes):
+  def add_probes(self, state: State, probes) -> None:
     """Add probes to the codeview of the state.
 
     Args:
@@ -304,7 +313,7 @@ class Agent:
     Returns:
         Object contents serialised into a string.
     """
-    print(self.total_reward)  # want string, not newline to stderr
+    print(self.total_reward)
 
 
 class Localiser(Agent):
@@ -316,8 +325,8 @@ class Localiser(Agent):
       probes: [str x int] list of probes, which pair a query and an offset.
 
   Methods:
-  generate_probes(self, state) -> []:
-  pick_action(self, state : State, reward: int) -> None:
+      generate_probes(self, state) -> []:
+      pick_action(self, state : State, reward: int) -> None:
   """
 
   def _generate_probes_random(self, state):
@@ -329,13 +338,14 @@ class Localiser(Agent):
     Returns:
       List of probes, which pair queries and offsets
     """
-    samples = sample_zipfian(1, 5)
-    codeview_length = len(state.codeview)
-    offsets = sample_wo_replacement_uniform(
-        samples[0], range(1, codeview_length)
-    )
+
+    state.descriptor.seek(0)
+    insertion_points = get_insertion_points(ast.parse(state.descriptor.read()))
+    samples = sample_zipfian(1, len(insertion_points))
+
+    offsets = sample_wo_replacement_uniform(samples[0], insertion_points)[:, 1]
     offsets.sort()
-    offsets = [idx + v for idx, v in enumerate(offsets)]
+
     ise = (
         f"Illegal state predicate: {state.ise} = "
         + "{eval("
@@ -343,10 +353,12 @@ class Localiser(Agent):
     )
     isb = f"bindings: {state.illegal_bindings()}"
     query = 'f"' + ise + isb + '"'
+
     probes = []
     for offset in offsets:
       probes.append((offset, f"print({query})\n"))
-    state.probes = probes  # Store probes
+    state.probes = probes
+
     return probes
 
   # TODO(etbarr): Build AST, reverse its edges and walk the tree from focal
@@ -516,6 +528,7 @@ class Environment:
     Returns:
         termination condition
     """
+
     if self.steps >= self.max_steps:
       return True
     return False
@@ -651,21 +664,22 @@ def main():
   """Program entry point."""
 
   args = process_args()
-  localiser = Localiser(Environment(args))
+  env = Environment(args)
+  localiser = Localiser(env)
 
-  while not Environment(args).terminate():
-    Environment(args).update(
+  while not env.terminate():
+    env.update(
         localiser.pick_action(
-            Environment(args).state, Environment(args).reward()
+            env.state, env.reward()
         )
     )
 
   try:
-    os.remove(Environment(args).instrumented_program_name)
+    os.remove(env.instrumented_program_name)
   except IOError as e:
     log.error(
         "Error: Unable to remove temp file '%s'.",
-        Environment(args).instrumented_program_name,
+        env.instrumented_program_name,
     )
     raise e
 
