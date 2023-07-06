@@ -15,7 +15,6 @@
 """This is executable pseudocode for an RL localiser."""
 
 # Standard Imports
-import argparse
 import ast
 import logging
 import math
@@ -24,138 +23,17 @@ import shutil
 import subprocess
 import tempfile
 
-#  Third-party Imports
-import numpy as np
-
 # Local imports
-# TODO(etbarr): deferred to speed proof of life
+from triangulate import ast_utils
+from triangulate import sampling_utils
 
 # Module setup
 
 log = logging.getLogger(__name__)
-rng = np.random.default_rng(seed=654)
 
-
+################################################################################
 # Utils
-
-## AST utils
-
-
-class LineVisitor(ast.NodeVisitor):
-  """Visit intra-statement lines in a Python script.
-
-  Attributes:
-    insertion_points:
-  """
-
-  def __init__(self):
-    self.insertion_points = []
-
-  def visit(self, node):
-    if isinstance(
-        node, (ast.FunctionDef, ast.ClassDef, ast.AsyncFunctionDef, ast.Module)
-    ):
-      for i, child in enumerate(node.body):
-        if isinstance(child, ast.Expr) and isinstance(
-            child.value, ast.Constant
-        ):
-          continue  # Skip multiline string literals
-        elif isinstance(child, (ast.Dict, ast.List)):
-          continue  # Skip dictionary and list initializers
-        elif hasattr(child, "lineno"):
-          self.insertion_points.append((node, i))
-    elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
-      return  # Skip multiline string literals
-    self.generic_visit(node)
-
-
-def get_insertion_points(tree: bytes) -> []:
-  # Collect insertion points
-  visitor = LineVisitor()
-  visitor.visit(tree)
-  insertion_points = visitor.insertion_points
-
-  if not insertion_points:
-    raise ValueError("No valid insertion points found.")
-
-  return insertion_points
-
-
-class IdentifierExtractor(ast.NodeVisitor):
-  """This visitor extracts variables from an AST."""
-
-  def __init__(self):
-    self.identifiers = set()
-
-  # This Google-violating function naming is required
-  # to confirm with Python's builtin AST library's interface.
-  def visit_Name(self, node):  # pylint: disable=invalid-name
-    self.identifiers.add(node.id)
-
-  def visit_Call(self, node):  # pylint: disable=invalid-name
-    for arg in node.args:
-      self.visit(arg)
-
-
-def extract_identifiers(expr):
-  """Parse a Python expression and extract its identifiers."""
-  root = ast.parse(expr)
-  visitor = IdentifierExtractor()
-  visitor.visit(root)
-  return visitor.identifiers
-
-
-## End AST Utils
-
-
-## Stats Utils
-
-
-def sample_zipfian(
-    num_samples: int, zipf_param: float = 1.5, support_size: int = 10
-) -> np.ndarray:
-  """Generate a sample set from a Zipfian distribution over an integer interval.
-
-  Args:
-
-  Args:
-
-  Args:
-      num_samples: The number of samples to return
-      zipf_param: The powerlaw exponent
-      support_size:  The size of the support, i.e. the width of the interval
-
-  Returns:
-      A sample set from a Zipfian
-  """
-
-  weights = 1.0 / np.power(np.arange(1, support_size + 1), zipf_param)
-  weights /= np.sum(weights)
-
-  return rng.choice(np.arange(1, support_size + 1), size=num_samples, p=weights)
-
-
-def sample_wo_replacement_uniform(num_samples: int, support: []) -> np.ndarray:
-  """Uniformly sample num_samples from [1, suppport].
-
-  Args:
-      num_samples: The number of samples to return
-      support:  The upper bound of the sampled interval
-
-  Returns:
-      A sample set from the uniform over the support
-  """
-  if num_samples > len(support):
-    raise ValueError(
-        "When sampling with replacement, the number of samples cannot exceed"
-        " the cardinality of the set."
-    )
-  return rng.choice(support, size=num_samples, replace=False)
-
-
-## End Stats Utils
-
-## File Utils
+################################################################################
 
 
 # TODO(etbarr):  Rewrite to use AST.
@@ -171,10 +49,9 @@ def write_lines_to_file(descriptor, lines_with_offsets):
     descriptor.seek(offset)
     descriptor.write(line)
 
-
-## End File utils
-
+################################################################################
 # Barebones RL
+################################################################################
 
 
 class State:
@@ -225,7 +102,7 @@ class State:
     Returns:
         Identifiers in the illegal state expression
     """
-    return extract_identifiers(self.ise)
+    return ast_utils.extract_identifiers(self.ise)
 
   def illegal_bindings(self):
     """Return f-string for reporting illegal bindings.
@@ -313,7 +190,7 @@ class Agent:
     Returns:
         Object contents serialised into a string.
     """
-    print(self.total_reward)
+    return str(self.total_reward)
 
 
 class Localiser(Agent):
@@ -340,10 +217,13 @@ class Localiser(Agent):
     """
 
     state.descriptor.seek(0)
-    insertion_points = get_insertion_points(ast.parse(state.descriptor.read()))
-    samples = sample_zipfian(1, len(insertion_points))
+    tree = ast.parse(state.descriptor.read())
+    insertion_points = ast_utils.get_insertion_points(tree)
+    samples = sampling_utils.sample_zipfian(1, len(insertion_points))
 
-    offsets = sample_wo_replacement_uniform(samples[0], insertion_points)[:, 1]
+    offsets = sampling_utils.sample_wo_replacement_uniform(
+        samples[0], insertion_points
+    )[:, 1]
     offsets.sort()
 
     ise = (
@@ -377,7 +257,7 @@ class Localiser(Agent):
 
   # Answers two questions:  decides 1) where to query 2) what.
   # Returns list of probes
-  def generate_probes(self, state) -> []:
+  def generate_probes(self, state):
     """Generate probes for the given state.
 
     To create each probe this, function must decide whether to query what.
@@ -458,7 +338,7 @@ class Environment:
     try:
       self.instrumented_program_name = os.path.join(
           tempfile.gettempdir(),
-          collision_avoiding_prefix + self.buggy_program_name,
+          collision_avoiding_prefix + os.path.basename(self.buggy_program_name)
       )
       shutil.copyfile(self.buggy_program_name, self.instrumented_program_name)
     except IOError as e:
@@ -486,7 +366,7 @@ class Environment:
     Raises:
       CallProcessError if subprocess.run fails.
     """
-
+    assert self.descriptor is not None
     self.descriptor.seek(0)
     if self.descriptor.readline().strip().startswith("#!"):
       shebang = self.descriptor.readline().strip()[2:].strip()
@@ -570,119 +450,4 @@ class Environment:
     Returns:
         Object contents serialised into a string.
     """
-    print("TODO")
-
-
-def process_args():
-  """Process command line arguments."""
-
-  parser = argparse.ArgumentParser()
-
-  parser.add_argument(
-      "-p",
-      "--buggy_program_name",
-      required=True,
-      help="the name of a buggy file",
-  )
-  parser.add_argument(
-      "-b", "--bug", required=True, help="a bug-triggering input"
-  )
-  parser.add_argument(
-      "-i",
-      "--illegal_state_expr",
-      required=True,
-      help=(
-          "A predicate defining illegal state; it is a fragment "
-          "of the program's specification, which is almost never "
-          "fully realised. Concretely, it will, for us, usually "
-          "be the complement of an assertion."
-      ),
-  )
-  parser.add_argument(
-      "-t",
-      "--bug_trap",
-      required=True,
-      help="program point at which the bug was observed",
-  )
-
-  parser.add_argument("-v", help="log level")
-  # During burnin, the program stores outputs for later use to checking
-  # whether injecting/executing probes has changed program semantics.
-  help_message = (
-      "Percentage of max_steps to use as burnin steps "
-      "to tolerate nondeterministic buggy programs; "
-      "zero (the default) disables burnin."
-  )
-  parser.add_argument(
-      "-n", "--burnin", nargs="?", default=0, type=int, help=help_message
-  )
-  parser.add_argument(
-      "-m",
-      "--max_steps",
-      nargs="?",
-      default=10,
-      type=int,
-      help="maximum simulation steps",
-  )
-  parser.add_argument(
-      "-o",
-      "--probe_output_filename",
-      nargs="?",
-      const="__probeOutput.dmp",
-      type=str,
-      help="maximum simulation steps",
-  )
-
-  args = parser.parse_args()
-
-  if not 0 <= args.burnin < 1:
-    err_template = "Error: burnin period must fall into the interval [0,1)."
-    log.error(err_template)
-    raise ValueError(err_template)
-
-  if args.__dict__.get("v", False):
-    if 0 <= args.v < 6:
-      logging.log_levels = [
-          logging.NOTSET,
-          logging.CRITICAL,
-          logging.ERROR,
-          logging.WARNING,
-          logging.INFO,
-          logging.DEBUG,
-      ]
-    logging.getLogger("localiser").setLevel(logging.log_levels[args.v])
-
-  if not args.buggy_program_name:
-    args.buggy_program_name = input(
-        "Please enter the name of the buggy program: "
-    )
-
-  return args
-
-
-def main():
-  """Program entry point."""
-
-  args = process_args()
-  env = Environment(args)
-  localiser = Localiser(env)
-
-  while not env.terminate():
-    env.update(
-        localiser.pick_action(
-            env.state, env.reward()
-        )
-    )
-
-  try:
-    os.remove(env.instrumented_program_name)
-  except IOError as e:
-    log.error(
-        "Error: Unable to remove temp file '%s'.",
-        env.instrumented_program_name,
-    )
-    raise e
-
-
-if __name__ == "__main__":
-  main()
+    raise NotImplementedError()
