@@ -387,7 +387,9 @@ class Environment:
       )
       return result.stdout + result.stderr
     except subprocess.CalledProcessError as e:
-      log.error("Error running instrumented program: %s", e.output)
+      log.error("Error running instrumented program.")
+      log.error(e.output)
+      log.error(e.stderr)
       raise e
     except Exception as e:
       log.error("Error: %s", e)
