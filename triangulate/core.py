@@ -16,11 +16,12 @@
 
 # Standard Imports
 import ast
+import contextlib
+import io
 import logging
 import math
 import os
 import shutil
-import subprocess
 import tempfile
 
 # Local imports
@@ -368,29 +369,25 @@ class Environment:
     """
     assert self.descriptor is not None
     self.descriptor.seek(0)
-    if self.descriptor.readline().strip().startswith("#!"):
-      shebang = self.descriptor.readline().strip()[2:].strip()
-    else:
-      shebang = None
 
-    if shebang:
-      cmd = ["./" + self.instrumented_program_name]
-    else:
-      cmd = ["python3", self.instrumented_program_name]
+    python_source = self.descriptor.read()
     try:
-      result = subprocess.run(
-          cmd,
-          stdout=subprocess.PIPE,
-          stderr=subprocess.PIPE,
-          text=True,
-          check=True,
+      compiled_source = compile(
+          python_source, "<code_to_instrument>", mode="exec"
       )
-      return result.stdout + result.stderr
-    except subprocess.CalledProcessError as e:
-      log.error("Error running instrumented program.")
-      log.error(e.output)
-      log.error(e.stderr)
+    except SyntaxError as e:
       raise e
+
+    try:
+      exec_globals = {}
+      exec_locals = None
+      buffer = io.StringIO()
+      with (
+          contextlib.redirect_stdout(buffer),
+          contextlib.redirect_stderr(buffer),
+      ):
+        exec(compiled_source, exec_globals, exec_locals)  # pylint:disable=exec-used
+      return buffer.getvalue()
     except Exception as e:
       log.error("Error: %s", e)
       raise e
