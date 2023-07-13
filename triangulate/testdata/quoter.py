@@ -12,9 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""This file is a test input to trangulate."""
+"""This file is a test input to triangulate."""
 
 import random
+
+random.seed(0)
 
 # Define a dictionary of quotes and their attributions
 quotes = {
@@ -49,7 +51,9 @@ quotes = {
 # Generate a random quote and attribution from the dictionary
 quote, attribution = random.choice(list(quotes.items()))
 
+quote_to_check = "The only way to do great work is to love what you do."
+assert quote_to_check in quotes, f"The quote '{quote_to_check}' is not present."
+
 # Print the quote with its attribution
 print("Today's inspirational quote:")
 print(f'"{quote}" - {attribution}')
-

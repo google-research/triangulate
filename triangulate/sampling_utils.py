@@ -14,6 +14,7 @@
 
 """Sampling utilities."""
 
+from typing import List
 import numpy as np
 
 rng = np.random.default_rng(seed=654)
@@ -43,7 +44,9 @@ def sample_zipfian(
   return rng.choice(np.arange(1, support_size + 1), size=num_samples, p=weights)
 
 
-def sample_wo_replacement_uniform(num_samples: int, support) -> np.ndarray:
+def sample_wo_replacement_uniform(
+    num_samples: int, support: List[int]
+) -> np.ndarray:
   """Uniformly sample num_samples from [1, suppport].
 
   Args:
@@ -55,7 +58,7 @@ def sample_wo_replacement_uniform(num_samples: int, support) -> np.ndarray:
   """
   if num_samples > len(support):
     raise ValueError(
-        "When sampling with replacement, the number of samples cannot exceed"
-        " the cardinality of the set."
+        "When sampling without replacement, the number of samples"
+        " cannot exceed the cardinality of the set."
     )
   return rng.choice(support, size=num_samples, replace=False)

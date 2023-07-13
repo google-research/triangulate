@@ -14,23 +14,21 @@
 
 """This is executable pseudocode for an RL localiser."""
 
-# Standard Imports
 import ast
 import contextlib
 import io
-import logging
 import math
 import os
 import shutil
 import tempfile
+from typing import List, TextIO, Tuple
 
-# Local imports
+from absl import logging
+import numpy as np
 from triangulate import ast_utils
 from triangulate import sampling_utils
 
-# Module setup
-
-log = logging.getLogger(__name__)
+rng = np.random.default_rng(seed=654)
 
 ################################################################################
 # Utils
@@ -38,17 +36,20 @@ log = logging.getLogger(__name__)
 
 
 # TODO(etbarr):  Rewrite to use AST.
-def write_lines_to_file(descriptor, lines_with_offsets):
+def write_lines_to_file(
+    descriptor: io.TextIOBase, offset_lines: List[Tuple[int, str]]
+) -> None:
   """Write lines to their paired offset in the given file descriptor.
 
   Args:
       descriptor:  File descriptor to which the to write the lines to their
         paired offsets
-      lines_with_offsets:  A list of lines paired with a target offset
+      offset_lines:  A list of lines paired with a target offset
   """
-  for offset, line in lines_with_offsets:
+  for offset, line in offset_lines:
     descriptor.seek(offset)
     descriptor.write(line)
+
 
 ################################################################################
 # Barebones RL
@@ -64,32 +65,46 @@ class State:
       probes: [str x int] list of probes, which pair a query and an offset.
   """
 
-  def set_ise(self, ise: str):
+  def set_ise(self, ise: str) -> None:
     try:
       compile(ise, "<string>", "eval")
     except SyntaxError as e:
       err_template = "Error: %s is an invalid Python expression."
-      log.error(err_template, ise)
+      logging.error(err_template, ise)
       # TODO(etbarr) add when Python 3.11 is available within Google
       # e.add_note(err_template % expr)
       raise e
     self.ise = ise
 
-  def set_focal_expr(self, focal_expr: str):
+  def set_focal_expr(self, focal_expr: str) -> None:
     try:
       compile(focal_expr, "<string>", "eval")
     except SyntaxError as e:
       err_template = "Error: %s is an invalid Python expression."
-      log.error(err_template, focal_expr)
+      logging.error(err_template, focal_expr)
       # TODO(etbarr) add when Python 3.11 is available within Google
       # e.add_note(err_template % expr)
       raise e
     self.focal_expr = focal_expr
 
-  def __init__(self, descriptor, ise: str, focal_expr: str, probes=None):
-    """State constructor."""
+  def __init__(
+      self,
+      descriptor: TextIO,
+      ise: str,
+      bug_trap: int,
+      probes: List[Tuple[int, str]] | None = None,
+  ):
     self.codeview = descriptor.readlines()  # TODO(etbarr): catch exceptions?
+    error_message = "bug trap out of bounds"
+    assert 0 <= bug_trap and bug_trap < len(self.codeview), error_message
     self.set_ise(ise)
+    if not ast_utils.is_assert_statement(self.codeview[bug_trap]):
+      raise ValueError(
+          "Bug_trap must identify an assertion statement, but"
+          f" codeview[bug_trap={bug_trap}] ="
+          f" '{self.codeview[bug_trap].strip()}', which is not."
+      )
+    focal_expr = ast_utils.extract_assert_expression(self.codeview[bug_trap])
     self.set_focal_expr(focal_expr)
     self.descriptor = descriptor
     if probes is None:
@@ -105,7 +120,7 @@ class State:
     """
     return ast_utils.extract_identifiers(self.ise)
 
-  def illegal_bindings(self):
+  def illegal_bindings(self) -> str | None:
     """Return f-string for reporting illegal bindings.
 
     Returns:
@@ -120,7 +135,7 @@ class State:
       bindings += f", {ident} = " + "{" + f"{ident}" + "}"
     return bindings
 
-  def get_codeview(self):
+  def get_codeview(self) -> List[str]:
     """Return codeview."""
     return self.codeview
 
@@ -154,7 +169,7 @@ class Agent:
     self.env = env
     self.total_reward = total_reward
 
-  def pick_action(self, state, reward: int) -> None:
+  def pick_action(self, state: State, reward: int) -> None:
     """Pick an action given the current state and reward.
 
     Args:
@@ -170,7 +185,7 @@ class Agent:
         reward,
     )
 
-  def add_probes(self, state: State, probes) -> None:
+  def add_probes(self, state: State, probes: List[Tuple[int, str]]) -> None:
     """Add probes to the codeview of the state.
 
     Args:
@@ -180,8 +195,8 @@ class Agent:
     Returns:
         None
     """
-    for offset, query in probes:
-      state.codeview.insert(offset, query)
+    for offset, probe in probes:
+      state.codeview.insert(offset, probe)
     state.descriptor.seek(0)
     state.descriptor.writelines(state.codeview)
 
@@ -221,16 +236,16 @@ class Localiser(Agent):
     tree = ast.parse(state.descriptor.read())
     insertion_points = ast_utils.get_insertion_points(tree)
     samples = sampling_utils.sample_zipfian(1, len(insertion_points))
-
     offsets = sampling_utils.sample_wo_replacement_uniform(
         samples[0], insertion_points
-    )[:, 1]
+    )
     offsets.sort()
 
     ise = (
-        f"Illegal state predicate: {state.ise} = "
+        f"Illegal state predicate: '{state.ise}' = "
         + "{eval("
-        + repr(state.ise) + ")}; "
+        + repr(state.ise)
+        + ")}; "
     )
     isb = f"bindings: {state.illegal_bindings()}"
     query = 'f"' + ise + isb + '"'
@@ -300,7 +315,16 @@ class Environment:
       state: State
   """
 
-  def __init__(self, args):
+  def __init__(
+      self,
+      buggy_program_name: str,
+      illegal_state_expr: str,
+      bug_triggering_input: str,
+      bug_trap: int,
+      burnin: int,
+      max_steps: int,
+      probe_output_filename: str,
+  ):
     """Construct an environment instance.
 
     Although we instrument the buggy program with probes, these probes write
@@ -316,24 +340,20 @@ class Environment:
     Returns:
         An environment instance
     """
-    self.buggy_program_name = args.buggy_program_name
+    self.buggy_program_name = buggy_program_name
     self.buggy_program_output = set()
     self.descriptor = None
     self.steps = 0
-    self.max_steps = args.max_steps
-    if args.burnin != 0:
-      self.max_burnin = math.ceil(args.burnin * self.max_steps)
+    self.max_steps = max_steps
+    if burnin != 0:
+      self.max_burnin = math.ceil(burnin * self.max_steps)
     else:
-      self.max_burnin = args.max_steps
+      self.max_burnin = max_steps
     file_extension = os.path.splitext(self.buggy_program_name)[1]
     # TODO(etbarr) bl/284330538 fix extension kludge
     if file_extension != ".py":
       err_template = "Error: %s is not a Python script."
-      log.error(err_template, self.buggy_program_name)
-      raise ValueError(err_template, self.buggy_program_name)
-    if not os.access(self.buggy_program_name, os.X_OK):
-      err_template = "Error: %s is not executable."
-      log.error(err_template, self.buggy_program_name)
+      logging.error(err_template, self.buggy_program_name)
       raise ValueError(err_template, self.buggy_program_name)
     collision_avoiding_prefix = "__"
     try:
@@ -351,13 +371,13 @@ class Environment:
           self.instrumented_program_name, "r+", encoding="utf-8"
       )
     except IOError as e:
-      log.error("Error: Unable to open file '%s'.", self.buggy_program_name)
+      logging.error("Error: Unable to open file '%s'.", self.buggy_program_name)
       raise e
-    self.state = State(self.descriptor, args.illegal_state_expr, args.bug_trap)
+    self.state = State(self.descriptor, illegal_state_expr, bug_trap)
 
     self.buggy_program_output.add(self.execute_subject())
 
-  # TODO(etbarr) Gather and pass subject's parameters to it.
+  # TODO(etbarr) Gather and pass a subject's parameters to it.
   def execute_subject(self) -> str:
     """Execute an instrumented version of the buggy program.
 
@@ -389,7 +409,7 @@ class Environment:
         exec(compiled_source, exec_globals, exec_locals)  # pylint:disable=exec-used
       return buffer.getvalue()
     except Exception as e:
-      log.error("Error: %s", e)
+      logging.error("Error: %s", e)
       raise e
 
   def reward(self) -> int:
@@ -436,7 +456,7 @@ class Environment:
           "Error: probe insertion or execution changed program semantics."
       )
       if stdouterr not in self.buggy_program_output:
-        log.exception(error_message)
+        logging.exception(error_message)
         raise AssertionError(error_message)
 
     self.buggy_program_output.add(stdouterr)
@@ -449,4 +469,4 @@ class Environment:
     Returns:
         Object contents serialised into a string.
     """
-    raise NotImplementedError()
+    raise NotImplementedError
